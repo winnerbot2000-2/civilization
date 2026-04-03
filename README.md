@@ -29,6 +29,13 @@ pip install -e .[dev,viewer]
 python -m civsim.cli.view --config configs/base.toml --seed 42
 ```
 
+The viewer keeps rendering separate from simulation stepping. It supports
+interactive pause/step control, stylized live 2D agent rendering, and
+accelerated speeds from `1x` to `500x` plus `MAX` without trying to draw every
+internal tick. The live window now includes visible on-screen controls so the
+viewer can be driven mainly through buttons rather than memorizing keybinds,
+and the map is rendered as a terrain-like surface rather than an obvious tile grid.
+
 Run a small batch:
 
 ```powershell

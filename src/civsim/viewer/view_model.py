@@ -2,17 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..analysis.detectors import detect_camps
+from ..analysis.detectors import detect_camps, detect_clusters
 
 
 @dataclass(slots=True)
 class MetricsSnapshot:
+    tick: int
     day: int
+    tick_in_day: int
     season: str
     living_population: int
     living_children: int
     living_elders: int
     active_camps: int
+    active_clusters: int
     mean_co_residence: float
     sharing_events: int
     child_survival_rate: float
@@ -20,6 +23,8 @@ class MetricsSnapshot:
     site_reuse_frequency: float
     path_count: int
     recent_event_count: int
+    recent_births: int
+    recent_deaths: int
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -63,13 +68,18 @@ def site_reuse_frequency(state) -> float:
 def build_metrics_snapshot(state, recent_event_count: int) -> MetricsSnapshot:
     living = [agent for agent in state.agents if agent.alive]
     camps = detect_camps(state.world)
+    clusters = detect_clusters(state)
+    recent = state.event_bus.records[-120:]
     return MetricsSnapshot(
+        tick=state.clock.tick,
         day=state.clock.day,
+        tick_in_day=state.clock.tick_in_day,
         season=state.clock.season_name,
         living_population=len(living),
         living_children=sum(1 for agent in living if agent.age_stage == "child"),
         living_elders=sum(1 for agent in living if agent.age_stage == "elder"),
         active_camps=len(camps),
+        active_clusters=len(clusters),
         mean_co_residence=mean_co_residence(state),
         sharing_events=state.metrics.sharing_events,
         child_survival_rate=child_survival_rate(state),
@@ -77,6 +87,8 @@ def build_metrics_snapshot(state, recent_event_count: int) -> MetricsSnapshot:
         site_reuse_frequency=site_reuse_frequency(state),
         path_count=len(state.world.path_traces),
         recent_event_count=recent_event_count,
+        recent_births=sum(1 for record in recent if record.kind == "birth"),
+        recent_deaths=sum(1 for record in recent if record.kind == "death"),
     )
 
 
@@ -105,7 +117,13 @@ def format_event(record) -> str:
     return f"Day {record.day}: {record.kind}"
 
 
-def recent_event_lines(state, limit: int = 14) -> list[str]:
+def _event_bucket(record) -> tuple[object, ...]:
+    if record.kind.startswith("action_"):
+        return (record.kind, record.agent_id, record.other_agent_id, record.patch_id, record.day)
+    return (record.kind, record.agent_id, record.other_agent_id, record.patch_id, record.day)
+
+
+def recent_event_lines(state, limit: int = 14, scan_limit: int = 320) -> list[str]:
     interesting = {
         "birth",
         "death",
@@ -119,8 +137,27 @@ def recent_event_lines(state, limit: int = 14) -> list[str]:
         "action_follow_caregiver",
         "action_take_food_from_site",
     }
-    records = [record for record in state.event_bus.records if record.kind in interesting or record.kind.startswith("action_")]
-    return [format_event(record) for record in records[-limit:]]
+    matched = []
+    for record in reversed(state.event_bus.records[-scan_limit:]):
+        if record.kind in interesting or record.kind.startswith("action_"):
+            matched.append(record)
+            if len(matched) >= limit * 4:
+                break
+    matched.reverse()
+
+    lines: list[str] = []
+    idx = 0
+    while idx < len(matched):
+        record = matched[idx]
+        count = 1
+        while idx + count < len(matched) and _event_bucket(matched[idx + count]) == _event_bucket(record):
+            count += 1
+        line = format_event(record)
+        if count > 1:
+            line = f"{line} x{count}"
+        lines.append(line)
+        idx += count
+    return lines[-limit:]
 
 
 def selected_agent_lines(state, agent_id: int | None, limit: int = 5) -> list[str]:
@@ -137,6 +174,7 @@ def selected_agent_lines(state, agent_id: int | None, limit: int = 5) -> list[st
         f"Traits cur={agent.traits.curiosity:.2f} agg={agent.traits.aggression:.2f} att={agent.traits.attachment_strength:.2f}",
         f"Skills forage={agent.skills.foraging:.2f} nav={agent.skills.navigation:.2f} care={agent.skills.caregiving:.2f}",
         f"Caregiver={agent.caregiver_id}  children={len(agent.child_ids)}  parents={list(agent.parent_ids)}",
+        f"Target={agent.current_target_patch}  streak={agent.action_streak}  alive={agent.alive}",
         "Recent site memories:",
     ]
 
