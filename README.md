@@ -42,16 +42,27 @@ Launch_CivSim.bat
 ```
 
 The launcher opens the live viewer, runs the simulation to the configured day
-limit, closes automatically when the run is finished, exports the run to
-`outputs/`, and writes a detailed end-of-run report for you. If you want it to
-open the report automatically afterward, add `--open-report`.
-You can also start smaller worlds directly from the launcher, for example:
+limit, exports the run to `outputs/`, and writes a detailed end-of-run report
+for you. The launcher now opens with a small settings menu, uses a fresh random
+seed for each new launched run by default, and when a run ends it shows a popup
+with `Run Again` or `Wait`. `Run Again` starts a fresh new run immediately;
+`Wait` returns you to the launcher menu so you can adjust settings first. If
+you want the report to open automatically afterward, enable `Open report after run`
+in the launcher menu or add `--open-report`.
+
+You can still bypass the menu and run a single viewer session directly:
+
+```powershell
+python launch_civsim.py --no-menu --agents 20 --children 2
+```
+
+Or open the launcher with starting defaults already filled in, for example:
 
 ```powershell
 python launch_civsim.py --agents 20
 python launch_civsim.py --agents 10
 python launch_civsim.py --agents 20 --children 2
-python launch_civsim.py --agents 20 --open-report
+python launch_civsim.py --open-report
 ```
 
 The viewer keeps rendering separate from simulation stepping. It supports

@@ -6,6 +6,14 @@ from math import exp
 
 
 @dataclass(slots=True)
+class TerrainCacheState:
+    terrain_key: tuple[object, ...] | None = None
+    terrain_surface: object | None = None
+    scaled_key: tuple[object, ...] | None = None
+    scaled_surface: object | None = None
+
+
+@dataclass(slots=True)
 class TrailSample:
     x: float
     y: float
@@ -18,6 +26,7 @@ class ViewerRenderState:
     trails: dict[int, deque[TrailSample]] = field(default_factory=dict)
     ambience_seconds: float = 0.0
     max_trail_samples: int = 10
+    terrain_cache: TerrainCacheState = field(default_factory=TerrainCacheState)
 
     def update_positions(
         self,

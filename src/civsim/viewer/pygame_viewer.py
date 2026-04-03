@@ -322,6 +322,47 @@ def _terrain_seed_values(patch_id: int) -> tuple[float, float, float]:
     return value_a, value_b, value_c
 
 
+def _average_color(colors: list[Color]) -> Color:
+    if not colors:
+        return (0, 0, 0)
+    count = len(colors)
+    return tuple(sum(color[channel] for color in colors) // count for channel in range(3))
+
+
+def _adjacent_profiles_for_vertex(world, profiles: list[TerrainProfile], vertex_x: int, vertex_y: int) -> list[TerrainProfile]:
+    neighbors: list[TerrainProfile] = []
+    for patch_y in (vertex_y - 1, vertex_y):
+        if patch_y < 0 or patch_y >= world.grid.height:
+            continue
+        for patch_x in (vertex_x - 1, vertex_x):
+            if patch_x < 0 or patch_x >= world.grid.width:
+                continue
+            neighbors.append(profiles[world.grid.patch_id(patch_x, patch_y)])
+    return neighbors
+
+
+def _build_vertex_color_surface(world, profiles: list[TerrainProfile], attribute: str) -> pygame.Surface:
+    surface = pygame.Surface((world.grid.width + 1, world.grid.height + 1))
+    for vertex_y in range(world.grid.height + 1):
+        for vertex_x in range(world.grid.width + 1):
+            local_profiles = _adjacent_profiles_for_vertex(world, profiles, vertex_x, vertex_y)
+            surface.set_at(
+                (vertex_x, vertex_y),
+                _average_color([getattr(profile, attribute) for profile in local_profiles]),
+            )
+    return surface
+
+
+def _terrain_relief_value(profile: TerrainProfile) -> float:
+    return (
+        profile.roughness * 0.55
+        + profile.danger * 0.28
+        + max(0.0, 0.42 - profile.shelter) * 0.18
+        - profile.water_value * 0.26
+        - profile.fertility * 0.14
+    )
+
+
 def _terrain_profile_for_patch(
     world,
     patch_id: int,
@@ -424,22 +465,16 @@ def _build_terrain_surface(
     visual_profile: VisualProfile,
 ) -> pygame.Surface:
     world = controller.state.world
-    terrain_scale = visual_profile.terrain_scale
-    detail_scale = max(terrain_scale * 2, 8)
-    base_surface = pygame.Surface((world.grid.width, world.grid.height))
+    detail_scale = max(visual_profile.terrain_scale * 2, 8)
     surface = pygame.Surface((world.grid.width * detail_scale, world.grid.height * detail_scale))
     detail = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    relief = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     rivers = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     movement_min = float(world.movement_cost.min())
     movement_max = float(world.movement_cost.max())
     food_capacity_max = float(world.food_capacity.max())
-    profiles: list[TerrainProfile] = []
-
-    for patch_id in range(world.grid.size):
-        gx, gy = world.grid.coords(patch_id)
-        px = gx * detail_scale
-        py = gy * detail_scale
-        profile = _terrain_profile_for_patch(
+    profiles = [
+        _terrain_profile_for_patch(
             world=world,
             patch_id=patch_id,
             season_name=controller.state.clock.season_name,
@@ -448,27 +483,109 @@ def _build_terrain_surface(
             movement_max=movement_max,
             food_capacity_max=food_capacity_max,
         )
-        profiles.append(profile)
-        base_surface.set_at((gx, gy), profile.base_color)
+        for patch_id in range(world.grid.size)
+    ]
+    base_scaled = pygame.transform.smoothscale(
+        _build_vertex_color_surface(world, profiles, "base_color"),
+        surface.get_size(),
+    )
+    accent_scaled = pygame.transform.smoothscale(
+        _build_vertex_color_surface(world, profiles, "accent_color"),
+        surface.get_size(),
+    )
+    vegetation_scaled = pygame.transform.smoothscale(
+        _build_vertex_color_surface(world, profiles, "vegetation_color"),
+        surface.get_size(),
+    )
+    surface.blit(base_scaled, (0, 0))
+    accent_scaled.set_alpha(58)
+    surface.blit(accent_scaled, (0, 0))
+    vegetation_scaled.set_alpha(22 if overlays.food else 10)
+    surface.blit(vegetation_scaled, (0, 0))
 
+    for patch_id, profile in enumerate(profiles):
+        gx, gy = world.grid.coords(patch_id)
+        px = gx * detail_scale
+        py = gy * detail_scale
         seed_a, seed_b, seed_c = _terrain_seed_values(patch_id)
-        center = (px + detail_scale * (0.28 + seed_a * 0.44), py + detail_scale * (0.28 + seed_b * 0.44))
-        accent = _blend(profile.accent_color, (255, 255, 255), 0.12 + seed_c * 0.04)
-        pygame.draw.circle(detail, (*accent, 16), (int(center[0]), int(center[1])), max(1, detail_scale // 3))
-        drift_center = (px + detail_scale * (0.2 + seed_b * 0.5), py + detail_scale * (0.22 + seed_c * 0.5))
-        pygame.draw.circle(detail, (*_blend(profile.base_color, (18, 20, 22), 0.08), 12), (int(drift_center[0]), int(drift_center[1])), max(1, detail_scale // 4))
+
+        swatch_color = _blend(profile.accent_color, profile.vegetation_color, 0.16 + profile.fertility * 0.32)
+        swatch_rect = pygame.Rect(
+            int(px - detail_scale * (0.24 + seed_a * 0.08)),
+            int(py - detail_scale * (0.18 + seed_b * 0.05)),
+            int(detail_scale * (1.48 + profile.fertility * 0.16)),
+            int(detail_scale * (1.22 + profile.water_value * 0.18)),
+        )
+        pygame.draw.ellipse(
+            detail,
+            (*swatch_color, int(16 + profile.fertility * 22 + profile.water_value * 16)),
+            swatch_rect,
+        )
+
+        drift_rect = pygame.Rect(
+            int(px + detail_scale * (-0.22 + seed_b * 0.18)),
+            int(py + detail_scale * (-0.18 + seed_c * 0.16)),
+            int(detail_scale * (0.92 + seed_a * 0.24)),
+            int(detail_scale * (0.76 + seed_b * 0.18)),
+        )
+        drift_color = _blend(profile.base_color, (16, 18, 24), 0.08 + profile.roughness * 0.06)
+        pygame.draw.ellipse(detail, (*drift_color, int(10 + profile.roughness * 16)), drift_rect)
+
+        if overlays.food and profile.fertility > 0.18 and profile.water_value < 0.58:
+            growth_rect = pygame.Rect(
+                int(px + detail_scale * (-0.12 + seed_a * 0.12)),
+                int(py + detail_scale * (-0.08 + seed_b * 0.10)),
+                int(detail_scale * (0.92 + profile.fertility * 0.42)),
+                int(detail_scale * (0.74 + profile.fertility * 0.28)),
+            )
+            growth_color = _blend(profile.vegetation_color, (214, 238, 176), 0.24)
+            pygame.draw.ellipse(detail, (*growth_color, int(10 + profile.fertility * 28)), growth_rect)
+
+        west_profile = profiles[world.grid.patch_id(max(0, gx - 1), gy)]
+        east_profile = profiles[world.grid.patch_id(min(world.grid.width - 1, gx + 1), gy)]
+        north_profile = profiles[world.grid.patch_id(gx, max(0, gy - 1))]
+        south_profile = profiles[world.grid.patch_id(gx, min(world.grid.height - 1, gy + 1))]
+        slope_x = _terrain_relief_value(east_profile) - _terrain_relief_value(west_profile)
+        slope_y = _terrain_relief_value(south_profile) - _terrain_relief_value(north_profile)
+        light_bias = _clamp((-slope_x * 0.72) + (-slope_y * 0.94), -1.0, 1.0)
+        relief_width = max(4, int(detail_scale * (0.96 + profile.roughness * 0.34)))
+        relief_height = max(4, int(detail_scale * (0.82 + profile.shelter * 0.18)))
+        if light_bias > 0.02:
+            highlight_rect = pygame.Rect(
+                int(px - detail_scale * 0.18),
+                int(py - detail_scale * 0.15),
+                relief_width,
+                relief_height,
+            )
+            pygame.draw.ellipse(
+                relief,
+                (246, 248, 252, int(light_bias * (14 + profile.roughness * 26 + profile.shelter * 10))),
+                highlight_rect,
+            )
+        if light_bias < -0.02:
+            shadow_rect = pygame.Rect(
+                int(px + detail_scale * 0.06),
+                int(py + detail_scale * 0.10),
+                relief_width,
+                relief_height,
+            )
+            pygame.draw.ellipse(
+                relief,
+                (18, 20, 24, int(abs(light_bias) * (12 + profile.roughness * 24 + profile.danger * 12))),
+                shadow_rect,
+            )
 
         if profile.terrain_kind in {"lush_grass", "grassland", "wetland"}:
             grass_color = _blend(profile.vegetation_color, (214, 230, 192), 0.18)
-            for idx in range(3):
-                blade_x = int(px + detail_scale * (0.22 + ((seed_a + idx * 0.21) % 0.56)))
-                blade_y = int(py + detail_scale * (0.34 + ((seed_b + idx * 0.17) % 0.42)))
-                blade_h = max(2, int(detail_scale * (0.18 + idx * 0.03)))
+            for idx in range(4):
+                blade_x = int(px + detail_scale * (0.16 + ((seed_a + idx * 0.19) % 0.72)))
+                blade_y = int(py + detail_scale * (0.40 + ((seed_b + idx * 0.13) % 0.36)))
+                blade_h = max(2, int(detail_scale * (0.17 + idx * 0.028)))
                 pygame.draw.line(detail, (*grass_color, 54), (blade_x, blade_y), (blade_x, blade_y - blade_h), 1)
         elif profile.terrain_kind == "woodland":
-            for idx in range(3):
-                canopy_x = int(px + detail_scale * (0.22 + ((seed_a + idx * 0.19) % 0.54)))
-                canopy_y = int(py + detail_scale * (0.28 + ((seed_b + idx * 0.23) % 0.46)))
+            for idx in range(4):
+                canopy_x = int(px + detail_scale * (0.18 + ((seed_a + idx * 0.17) % 0.64)))
+                canopy_y = int(py + detail_scale * (0.22 + ((seed_b + idx * 0.19) % 0.58)))
                 canopy_r = max(1, detail_scale // 5)
                 pygame.draw.circle(detail, (*profile.vegetation_color, 52), (canopy_x, canopy_y), canopy_r)
                 pygame.draw.circle(detail, (*_blend(profile.vegetation_color, (34, 58, 34), 0.35), 46), (canopy_x, canopy_y), max(1, canopy_r - 1))
@@ -477,16 +594,16 @@ def _build_terrain_surface(
             pygame.draw.line(
                 detail,
                 (*ridge_color, 44),
-                (int(px + detail_scale * 0.16), int(py + detail_scale * (0.34 + seed_a * 0.2))),
-                (int(px + detail_scale * 0.82), int(py + detail_scale * (0.52 + seed_b * 0.18))),
+                (int(px + detail_scale * 0.08), int(py + detail_scale * (0.32 + seed_a * 0.22))),
+                (int(px + detail_scale * 0.94), int(py + detail_scale * (0.54 + seed_b * 0.16))),
                 1,
             )
             if profile.terrain_kind == "badlands":
                 pygame.draw.line(
                     detail,
                     (*_blend(ridge_color, (188, 104, 98), 0.25), 38),
-                    (int(px + detail_scale * 0.28), int(py + detail_scale * 0.18)),
-                    (int(px + detail_scale * 0.64), int(py + detail_scale * 0.78)),
+                    (int(px + detail_scale * 0.22), int(py + detail_scale * 0.14)),
+                    (int(px + detail_scale * 0.72), int(py + detail_scale * 0.82)),
                     1,
                 )
 
@@ -511,23 +628,22 @@ def _build_terrain_surface(
         if overlays.water and profile.water_value > 0.14:
             center_x = px + detail_scale * 0.5
             center_y = py + detail_scale * 0.5
-            river_radius = max(2, int(detail_scale * (0.10 + profile.water_value * 0.22)))
+            river_radius = max(2, int(detail_scale * (0.12 + profile.water_value * 0.24)))
             river_color = (46, 132, 214, int(70 + profile.water_value * 80))
             highlight = (196, 232, 255, int(14 + profile.water_value * 30))
             pygame.draw.circle(rivers, river_color, (int(center_x), int(center_y)), river_radius)
             pygame.draw.circle(rivers, highlight, (int(center_x), int(center_y)), max(1, river_radius // 2))
+            shimmer_rect = pygame.Rect(
+                int(center_x - river_radius * 1.1),
+                int(center_y - river_radius * 0.72),
+                max(2, int(river_radius * 2.2)),
+                max(2, int(river_radius * 1.35)),
+            )
+            pygame.draw.arc(rivers, (226, 244, 255, int(12 + profile.water_value * 22)), shimmer_rect, 0.3, 2.4, 1)
             for neighbor in world.grid.neighbor_tuple(patch_id):
                 if neighbor <= patch_id:
                     continue
-                neighbor_profile = profiles[neighbor] if neighbor < len(profiles) else _terrain_profile_for_patch(
-                    world,
-                    neighbor,
-                    controller.state.clock.season_name,
-                    overlays,
-                    movement_min,
-                    movement_max,
-                    food_capacity_max,
-                )
+                neighbor_profile = profiles[neighbor]
                 if neighbor_profile.water_value <= 0.14:
                     continue
                 nx, ny = world.grid.coords(neighbor)
@@ -546,11 +662,49 @@ def _build_terrain_surface(
                     1,
                 )
 
-    base_scaled = pygame.transform.smoothscale(base_surface, surface.get_size())
-    surface.blit(base_scaled, (0, 0))
+    surface.blit(relief, (0, 0))
     surface.blit(detail, (0, 0))
     surface.blit(rivers, (0, 0))
     return surface
+
+
+def _terrain_surface_key(controller: ViewerController, overlays: OverlayState, visual_profile: VisualProfile) -> tuple[object, ...]:
+    dynamic_state = controller.state.clock.tick if overlays.resource_pressure else controller.state.clock.season_name if overlays.season_tint else "static"
+    return (
+        controller.state.world.grid.width,
+        controller.state.world.grid.height,
+        visual_profile.terrain_scale,
+        overlays.terrain,
+        overlays.water,
+        overlays.food,
+        overlays.danger,
+        overlays.shelter,
+        overlays.season_tint,
+        overlays.resource_pressure,
+        dynamic_state,
+    )
+
+
+def _cached_terrain_surface(
+    controller: ViewerController,
+    overlays: OverlayState,
+    render_state: ViewerRenderState,
+    visual_profile: VisualProfile,
+    map_size: tuple[int, int],
+) -> pygame.Surface:
+    terrain_key = _terrain_surface_key(controller, overlays, visual_profile)
+    cache = render_state.terrain_cache
+    if cache.terrain_key != terrain_key or cache.terrain_surface is None:
+        cache.terrain_surface = _build_terrain_surface(controller, overlays, visual_profile)
+        cache.terrain_key = terrain_key
+        cache.scaled_surface = None
+        cache.scaled_key = None
+
+    scaled_key = (*terrain_key, map_size)
+    if cache.scaled_key != scaled_key or cache.scaled_surface is None:
+        cache.scaled_surface = pygame.transform.smoothscale(cache.terrain_surface, map_size)
+        cache.scaled_key = scaled_key
+    return cache.scaled_surface
 
 
 def _draw_world(
@@ -559,6 +713,7 @@ def _draw_world(
     overlays: OverlayState,
     map_rect: pygame.Rect,
     cell_size: int,
+    render_state: ViewerRenderState,
     ambience_seconds: float,
     visual_profile: VisualProfile,
     frame_snapshot: ViewerFrameSnapshot,
@@ -569,8 +724,7 @@ def _draw_world(
     clusters = {cluster.patch_id: cluster for cluster in frame_snapshot.clusters}
     water_hotspots = [patch_id for patch_id, value in enumerate(world.water) if float(value) > 0.64]
     danger_hotspots = [patch_id for patch_id, value in enumerate(world.danger) if float(value) > 0.58]
-    terrain_surface = _build_terrain_surface(controller, overlays, visual_profile)
-    terrain_scaled = pygame.transform.smoothscale(terrain_surface, map_rect.size)
+    terrain_scaled = _cached_terrain_surface(controller, overlays, render_state, visual_profile, map_rect.size)
     surface.blit(terrain_scaled, map_rect.topleft)
     pygame.draw.rect(surface, (24, 28, 34), map_rect, 1, border_radius=16)
 
@@ -1061,7 +1215,10 @@ def _handle_button_action(button_action: str, controller: ViewerController, over
         controller.set_paused(True)
         return
     if button_action == "restart":
-        controller.restart()
+        if controller.randomize_on_restart:
+            controller.restart_random()
+        else:
+            controller.restart()
         return
     if button_action == "step_tick":
         controller.queue_tick()
@@ -1089,13 +1246,19 @@ def run_viewer(
     max_frames: int | None = None,
     auto_close_on_finish: bool = False,
     finish_hold_seconds: float = 0.9,
+    randomize_restart_seed: bool = False,
 ) -> object:
     pygame.init()
     pygame.display.set_caption("CivSim Alive Viewer")
     screen = pygame.display.set_mode((1560, 980), pygame.RESIZABLE)
     frame_clock = pygame.time.Clock()
 
-    controller = ViewerController(base_config=config, seed=seed if seed is not None else config.run.seed, max_days=max_days)
+    controller = ViewerController(
+        base_config=config,
+        seed=seed if seed is not None else config.run.seed,
+        max_days=max_days,
+        randomize_on_restart=randomize_restart_seed,
+    )
     controller.set_paused(start_paused)
     overlays = OverlayState()
     render_state = ViewerRenderState()
@@ -1150,7 +1313,10 @@ def run_viewer(
                     controller.set_paused(True)
                     force_redraw = True
                 elif event.key == pygame.K_r:
-                    controller.restart()
+                    if controller.randomize_on_restart:
+                        controller.restart_random()
+                    else:
+                        controller.restart()
                     render_state = ViewerRenderState()
                     force_redraw = True
                 elif event.key == pygame.K_LEFTBRACKET:
@@ -1266,7 +1432,7 @@ def run_viewer(
             button_font=button_font,
             mouse_pos=pygame.mouse.get_pos(),
         )
-        _draw_world(screen, controller, overlays, map_rect, cell_size, render_state.ambience_seconds, visual_profile, frame_snapshot)
+        _draw_world(screen, controller, overlays, map_rect, cell_size, render_state, render_state.ambience_seconds, visual_profile, frame_snapshot)
         _draw_selected_memory_overlays(screen, controller, overlays, map_rect, cell_size, render_state.ambience_seconds, visual_profile)
         if overlays.social_links:
             _draw_social_links(screen, controller, positions)

@@ -97,6 +97,14 @@ def _normalize(values: list[float]) -> list[float]:
     return [(value - low) / span for value in values]
 
 
+def _local_water_access(world, patch_id: int) -> float:
+    local_patches = (patch_id, *world.grid.neighbor_tuple(patch_id))
+    return max(
+        float(world.water[patch_id]) * 0.88,
+        sum(float(world.water[neighbor]) for neighbor in local_patches) / len(local_patches),
+    )
+
+
 def _spawn_quality_scores(world) -> list[float]:
     food_capacity = [float(value) for value in world.food_capacity]
     movement_cost = [float(value) for value in world.movement_cost]
@@ -105,22 +113,23 @@ def _spawn_quality_scores(world) -> list[float]:
     qualities: list[float] = []
     for patch_id in range(world.grid.size):
         local_patches = (patch_id, *world.grid.neighbor_tuple(patch_id))
-        local_water = sum(float(world.water[neighbor]) for neighbor in local_patches) / len(local_patches)
+        local_water = _local_water_access(world, patch_id)
         local_food = sum(food_norm[neighbor] for neighbor in local_patches) / len(local_patches)
         local_shelter = sum(float(world.shelter[neighbor]) for neighbor in local_patches) / len(local_patches)
         local_danger = sum(float(world.danger[neighbor]) for neighbor in local_patches) / len(local_patches)
         local_movement = sum(movement_norm[neighbor] for neighbor in local_patches) / len(local_patches)
+        direct_wetness = max(0.0, float(world.water[patch_id]) - 0.62)
         qualities.append(
-            float(world.water[patch_id]) * 0.56
-            + food_norm[patch_id] * 0.28
-            + float(world.shelter[patch_id]) * 0.12
-            + local_water * 0.28
-            + local_food * 0.2
-            + local_shelter * 0.08
+            local_water * 0.46
+            + local_food * 0.24
+            + local_shelter * 0.14
+            + food_norm[patch_id] * 0.18
+            + float(world.shelter[patch_id]) * 0.1
             - float(world.danger[patch_id]) * 0.22
             - local_danger * 0.16
             - movement_norm[patch_id] * 0.08
             - local_movement * 0.06
+            - direct_wetness * 0.48
         )
     return _normalize(qualities)
 
@@ -132,8 +141,8 @@ def _pick_cluster_sites(world, spawn_quality: list[float], cluster_count: int, r
         patch_id
         for patch_id in candidates
         if (
-            float(world.water[patch_id]) >= 0.28
-            or sum(float(world.water[neighbor]) for neighbor in (patch_id, *world.grid.neighbor_tuple(patch_id))) / len((patch_id, *world.grid.neighbor_tuple(patch_id))) >= 0.24
+            _local_water_access(world, patch_id) >= 0.28
+            and float(world.water[patch_id]) <= 0.88
         )
     ]
     candidate_pool = (hydrated_candidates[:candidate_limit] or candidates[:candidate_limit])
@@ -177,9 +186,10 @@ def create_initial_agents(config, life_config: LifeConfig, world, rng) -> list[A
                 0.05,
                 spawn_quality[candidate_patch]
                 * (1.55 if candidate_patch == home_patch else 1.0)
-                + float(world.water[candidate_patch]) * 0.15
+                + _local_water_access(world, candidate_patch) * 0.15
                 + food_capacity_norm[candidate_patch] * 0.12,
             )
+            - max(0.0, float(world.water[candidate_patch]) - 0.7) * 0.22
             for candidate_patch in local_options
         ]
         patch_id = rng.choices(local_options, weights=local_weights, k=1)[0]
