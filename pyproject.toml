@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "civsim"
+version = "0.1.0"
+description = "Emergent proto-society simulation foundation"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2.0,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<10.0",
+]
+viewer = [
+  "pygame>=2.5,<3.0",
+]
+
+[project.scripts]
+civsim-run = "civsim.cli.run:main"
+civsim-view = "civsim.cli.view:main"
+civsim-launch = "civsim.cli.launch:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
