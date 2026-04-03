@@ -1,0 +1,79 @@
+[run]
+days = 365
+seed = 42
+
+[world]
+width = 32
+height = 20
+ticks_per_day = 4
+season_length_days = 60
+water_source_count = 5
+danger_source_count = 5
+food_regrowth_good = 0.09
+food_regrowth_bad = 0.03
+good_season_food_multiplier = 1.05
+bad_season_food_multiplier = 0.72
+site_decay = 0.01
+path_decay = 0.005
+camp_shelter_bonus = 0.15
+
+[agents]
+initial_population = 120
+initial_children = 24
+perception_radius = 1
+starting_food = 1.8
+max_carried_food = 4.0
+hunger_rate = 0.03
+thirst_rate = 0.05
+fatigue_rate = 0.02
+social_need_rate = 0.01
+stress_recovery = 0.05
+base_food_yield = 0.9
+base_water_relief = 1.1
+rest_recovery = 0.24
+
+[memory]
+max_spatial_entries = 16
+max_episodes = 12
+spatial_decay = 0.004
+social_decay = 0.002
+habit_decay = 0.002
+salience_threshold = 0.25
+
+[learning]
+reinforcement_rate = 0.12
+imitation_rate = 0.04
+skill_gain_rate = 0.02
+child_observation_bonus = 0.02
+
+[social]
+share_threshold = 1.4
+share_amount = 0.6
+trust_gain = 0.08
+trust_loss = 0.18
+attachment_gain = 0.04
+co_residence_gain = 0.03
+theft_stress = 0.12
+
+[life]
+child_stage_days = 240
+elder_stage_days = 2400
+max_age_days = 3600
+gestation_days = 80
+fertility_cooldown_days = 120
+base_conception_chance = 0.02
+child_hunger_penalty = 0.008
+mutation_sigma = 0.08
+
+[materials]
+hearth_creation_threshold = 2
+hearth_strength_gain = 0.18
+hearth_decay = 0.004
+site_store_capacity = 12.0
+path_strength_gain = 0.06
+
+[metrics]
+sample_every_days = 1
+
+[events]
+record_limit = 200000
