@@ -23,12 +23,12 @@ class WorldConfig:
     danger_exponent: float = 1.35
     shelter_exponent: float = 1.25
     movement_cost_min: float = 0.85
-    movement_cost_max: float = 2.6
-    food_regrowth_good: float = 0.14
-    food_regrowth_bad: float = 0.03
+    movement_cost_max: float = 2.4
+    food_regrowth_good: float = 0.16
+    food_regrowth_bad: float = 0.04
     good_season_food_multiplier: float = 1.16
-    bad_season_food_multiplier: float = 0.62
-    bad_season_food_decay: float = 0.018
+    bad_season_food_multiplier: float = 0.68
+    bad_season_food_decay: float = 0.014
     dry_patch_thirst_penalty: float = 0.01
     night_exposure_fatigue: float = 0.045
     night_exposure_stress: float = 0.025
@@ -37,23 +37,25 @@ class WorldConfig:
     site_decay: float = 0.01
     path_decay: float = 0.005
     camp_shelter_bonus: float = 0.15
+    camp_wetness_threshold: float = 0.54
+    camp_wetness_penalty: float = 0.58
 
 
 @dataclass(slots=True)
 class AgentsConfig:
-    initial_population: int = 84
+    initial_population: int = 76
     initial_children: int = 8
     perception_radius: int = 3
     starting_food: float = 2.4
     max_carried_food: float = 4.0
-    hunger_rate: float = 0.024
+    hunger_rate: float = 0.023
     thirst_rate: float = 0.038
-    fatigue_rate: float = 0.014
+    fatigue_rate: float = 0.012
     social_need_rate: float = 0.009
     stress_recovery: float = 0.055
-    base_food_yield: float = 1.12
+    base_food_yield: float = 1.24
     base_water_relief: float = 1.32
-    rest_recovery: float = 0.28
+    rest_recovery: float = 0.3
 
 
 @dataclass(slots=True)
@@ -84,6 +86,8 @@ class DecisionConfig:
     inertia_switch_margin: float = 0.22
     fallback_threshold: float = 0.3
     uncertainty_margin: float = 0.18
+    reverse_move_penalty: float = 0.42
+    stationary_penalty_scale: float = 0.62
 
 
 @dataclass(slots=True)

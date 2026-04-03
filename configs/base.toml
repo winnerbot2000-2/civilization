@@ -13,12 +13,12 @@ water_access_exponent = 1.55
 danger_exponent = 1.35
 shelter_exponent = 1.25
 movement_cost_min = 0.85
-movement_cost_max = 2.6
-food_regrowth_good = 0.14
-food_regrowth_bad = 0.03
+movement_cost_max = 2.4
+food_regrowth_good = 0.16
+food_regrowth_bad = 0.04
 good_season_food_multiplier = 1.16
-bad_season_food_multiplier = 0.62
-bad_season_food_decay = 0.018
+bad_season_food_multiplier = 0.68
+bad_season_food_decay = 0.014
 dry_patch_thirst_penalty = 0.01
 night_exposure_fatigue = 0.045
 night_exposure_stress = 0.025
@@ -27,21 +27,23 @@ danger_stress_scale = 0.12
 site_decay = 0.01
 path_decay = 0.005
 camp_shelter_bonus = 0.15
+camp_wetness_threshold = 0.54
+camp_wetness_penalty = 0.58
 
 [agents]
-initial_population = 84
+initial_population = 76
 initial_children = 8
 perception_radius = 3
 starting_food = 2.4
 max_carried_food = 4.0
-hunger_rate = 0.024
+hunger_rate = 0.023
 thirst_rate = 0.038
-fatigue_rate = 0.014
+fatigue_rate = 0.012
 social_need_rate = 0.009
 stress_recovery = 0.055
-base_food_yield = 1.12
+base_food_yield = 1.24
 base_water_relief = 1.32
-rest_recovery = 0.28
+rest_recovery = 0.3
 
 [memory]
 max_spatial_entries = 16
@@ -66,6 +68,8 @@ inertia_bonus = 0.28
 inertia_switch_margin = 0.22
 fallback_threshold = 0.3
 uncertainty_margin = 0.18
+reverse_move_penalty = 0.42
+stationary_penalty_scale = 0.62
 
 [social]
 share_threshold = 1.1

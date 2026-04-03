@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+import random
 
 from ..core.simulation import initialize_simulation, run_tick
 
@@ -11,6 +12,7 @@ class ViewerController:
     base_config: object
     seed: int
     max_days: int | None = None
+    randomize_on_restart: bool = False
     speed_levels: tuple[int | None, ...] = (1, 2, 5, 10, 50, 100, 500, None)
     speed_index: int = 2
     paused: bool = False
@@ -72,6 +74,9 @@ class ViewerController:
 
     def change_seed(self, delta: int) -> None:
         self.restart(max(0, self.seed + delta), preserve_pause=True)
+
+    def restart_random(self) -> None:
+        self.restart(random.SystemRandom().randint(1, 2_147_483_647), preserve_pause=True)
 
     def toggle_pause(self) -> None:
         self.paused = not self.paused

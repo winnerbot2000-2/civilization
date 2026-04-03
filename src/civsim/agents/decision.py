@@ -27,12 +27,71 @@ class NeedProfile:
     attention_limit: int
 
 
+MOVEMENT_ACTIONS = {"move_local", "move_to_known_site", "follow_caregiver", "avoid_danger", "explore"}
+STATIONARY_ACTIONS = {
+    "stay_with_kin",
+    "wait",
+    "rest",
+    "shelter_at_site",
+    "share_food",
+    "take_food_from_site",
+    "store_food_at_site",
+}
+
+
 def _positive_delta(current: float, previous: float) -> float:
     return max(0.0, current - previous)
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 2.0) -> float:
     return max(low, min(high, value))
+
+
+def _water_access(world, patch_id: int) -> float:
+    local_patches = (patch_id, *world.grid.neighbor_tuple(patch_id))
+    return max(
+        float(world.water[patch_id]) * 0.88,
+        sum(float(world.water[neighbor]) for neighbor in local_patches) / len(local_patches),
+    )
+
+
+def _camp_viability(world, patch_id: int, config) -> float:
+    local_patches = (patch_id, *world.grid.neighbor_tuple(patch_id))
+    nearby_food = max(float(world.food[neighbor]) for neighbor in local_patches)
+    nearby_shelter = max(float(world.shelter[neighbor]) for neighbor in local_patches)
+    water_access = _water_access(world, patch_id)
+    direct_wetness = max(0.0, float(world.water[patch_id]) - config.world.camp_wetness_threshold)
+    return (
+        water_access * 0.34
+        + nearby_food * 0.26
+        + nearby_shelter * 0.34
+        - float(world.danger[patch_id]) * 0.34
+        - max(0.0, float(world.movement_cost[patch_id]) - 1.0) * 0.08
+        - direct_wetness * config.world.camp_wetness_penalty
+    )
+
+
+def _survival_pressure(profile: NeedProfile) -> float:
+    return max(
+        profile.urgency["thirst"] + profile.trend["thirst"] * 1.1,
+        profile.urgency["hunger"] + profile.trend["hunger"] * 0.95,
+        profile.urgency["safety"] + profile.trend["safety"] * 0.8,
+        profile.urgency["fatigue"] * 0.7 + profile.trend["fatigue"] * 0.4,
+        profile.obligation * 0.8,
+    )
+
+
+def _stationary_survival_penalty(agent, patch_id: int, world, profile: NeedProfile, config) -> float:
+    viability = _camp_viability(world, patch_id, config)
+    pressure = _survival_pressure(profile)
+    poor_patch = max(0.0, 0.7 - viability)
+    hunger_thirst_drag = profile.urgency["hunger"] * 0.2 + profile.urgency["thirst"] * 0.28
+    direct_wetness = max(0.0, float(world.water[patch_id]) - config.world.camp_wetness_threshold)
+    return (
+        poor_patch * config.decision.stationary_penalty_scale * (0.8 + pressure * 0.55)
+        + hunger_thirst_drag
+        + direct_wetness * config.world.camp_wetness_penalty * 0.9
+    )
 
 
 def _need_profile(agent, percept, config, agents_by_id) -> NeedProfile:
@@ -108,6 +167,8 @@ def _local_patch_salience(agent, patch_id: int, world, profile: NeedProfile, per
 
 
 def _local_patch_salience_with_biases(agent, patch_id: int, world, profile: NeedProfile, social_config, social_bias, memory_bias) -> float:
+    water_access = _water_access(world, patch_id)
+    wetness_penalty = max(0.0, float(world.water[patch_id]) - 0.7) * 0.38
     social_pull = (
         social_bias.affinity * (0.18 + profile.urgency["social"] * 0.2 + profile.attachment * 0.06)
         + social_bias.kin_presence * social_config.kin_preference_bias * 0.08
@@ -115,10 +176,11 @@ def _local_patch_salience_with_biases(agent, patch_id: int, world, profile: Need
     )
     social_risk = social_bias.avoidance * (0.3 + profile.fear * 0.08)
     return (
-        world.water[patch_id] * profile.urgency["thirst"] * 0.9
+        water_access * profile.urgency["thirst"] * 0.9
         + world.food[patch_id] * profile.urgency["hunger"] * 0.8
         + world.shelter[patch_id] * profile.urgency["fatigue"] * 0.55
         - world.danger[patch_id] * profile.urgency["safety"] * (1.1 - agent.traits.boldness * 0.4)
+        - wetness_penalty * (0.3 + profile.urgency["fatigue"] * 0.25 + profile.urgency["social"] * 0.2)
         + memory_bias.expected * 0.45
         + memory_bias.revisit * 0.4
         - memory_bias.risk * 0.6
@@ -150,8 +212,23 @@ def _inertia_bonus(agent, action: str, target_patch: int | None, config, profile
     bonus = config.decision.inertia_bonus * streak_scale
     if action in {"move_local", "move_to_known_site", "follow_caregiver", "avoid_danger"} and agent.current_target_patch != target_patch:
         bonus *= 0.35
+    if action in {"stay_with_kin", "wait", "share_food"}:
+        bonus *= 0.35
+    elif action in {"rest", "shelter_at_site"}:
+        bonus *= 0.65
     urgency_pressure = max(profile.urgency.values()) + max(profile.trend.values())
     return bonus * max(0.25, 1.0 - urgency_pressure * 0.18)
+
+
+def _reverse_move_penalty(agent, action: str, target_patch: int | None, config, profile: NeedProfile) -> float:
+    if action not in MOVEMENT_ACTIONS or target_patch is None or agent.last_patch_id is None:
+        return 0.0
+    if target_patch != agent.last_patch_id:
+        return 0.0
+    if agent.current_action not in MOVEMENT_ACTIONS:
+        return 0.0
+    pressure = _survival_pressure(profile)
+    return config.decision.reverse_move_penalty * max(0.15, 1.0 - pressure * 0.45)
 
 
 def _personality_bias(agent, action: str) -> float:
@@ -265,6 +342,7 @@ def _add_candidate(
     if context is not None:
         score += habit_bias(agent.habits, f"{action}:{context}")
     score += _inertia_bonus(agent, action, target_patch, config, profile)
+    score -= _reverse_move_penalty(agent, action, target_patch, config, profile)
     score += rng.gauss(0.0, config.decision.noise_scale * (0.8 + agent.traits.curiosity * 0.25))
     candidates.append(
         ActionIntent(
@@ -282,6 +360,7 @@ def _fallback_intent(
     clock,
     best_social_patch: int | None = None,
     remembered_water_patch: int | None = None,
+    best_camp_patch: int | None = None,
 ) -> ActionIntent:
     if _thirst_pressure(profile) > 0.95:
         if percept.current_water > 0.18:
@@ -297,6 +376,8 @@ def _fallback_intent(
             return ActionIntent(agent_id=agent.agent_id, action="move_to_known_site", target_patch=remembered_water_patch, score=_thirst_pressure(profile))
     if agent.age_stage == "child" and percept.caregiver_patch is not None and percept.caregiver_patch != agent.patch_id:
         return ActionIntent(agent_id=agent.agent_id, action="follow_caregiver", target_patch=percept.caregiver_patch, score=profile.obligation + 0.5)
+    if best_camp_patch is not None and (clock.is_night or profile.urgency["fatigue"] > 0.55):
+        return ActionIntent(agent_id=agent.agent_id, action="move_local", target_patch=best_camp_patch, score=profile.urgency["fatigue"] + 0.35)
     if profile.fear > 0.8 or profile.urgency["fatigue"] > 0.75 or clock.is_night:
         return ActionIntent(agent_id=agent.agent_id, action="wait", score=profile.fear + profile.urgency["fatigue"] * 0.5)
     if profile.urgency["social"] > 0.6 and percept.nearby_kin:
@@ -330,6 +411,25 @@ def _best_social_patch(agent, percept, world, social_config, social_bias_for_pat
             best_bias = bias
             best_score = score
     return best_patch, best_bias
+
+
+def _best_camp_patch(agent, percept, world, config, social_bias_for_patch) -> tuple[int | None, float]:
+    best_patch = None
+    best_score = _camp_viability(world, agent.patch_id, config)
+    for patch_id in percept.nearby_patches:
+        if patch_id == agent.patch_id:
+            continue
+        social_bias = social_bias_for_patch(patch_id)
+        score = (
+            _camp_viability(world, patch_id, config)
+            + social_bias.affinity * 0.12
+            + social_bias.kin_presence * config.social.kin_preference_bias * 0.08
+            - social_bias.avoidance * 0.22
+        )
+        if score > best_score + 0.08:
+            best_patch = patch_id
+            best_score = score
+    return best_patch, best_score
 
 
 def generate_action_intent(agent, percept, world, agents_by_id, clock, config, rng) -> ActionIntent:
@@ -381,6 +481,8 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
     candidates: list[ActionIntent] = []
     current_patch_bias = memory_bias_for_patch(agent.patch_id)
     current_social_bias = social_bias_for_patch(agent.patch_id)
+    current_camp_viability = _camp_viability(world, agent.patch_id, config)
+    current_stationary_penalty = _stationary_survival_penalty(agent, agent.patch_id, world, profile, config)
 
     current_water_expected, _, current_water_uncertainty = _spatial_memory_value(agent, "water", agent.patch_id)
     current_food_expected, current_food_risk, current_food_uncertainty = _spatial_memory_value(agent, "food", agent.patch_id)
@@ -427,7 +529,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             rng=rng,
             profile=profile,
             action="forage",
-            urgency=profile.urgency["hunger"] * 0.92,
+            urgency=profile.urgency["hunger"] * 1.12 + max(0.0, 0.9 - agent.carried_food) * 0.18,
             trend=profile.trend["hunger"],
             expected=percept.current_food * 0.75
             + agent.skills.foraging * 0.55
@@ -439,7 +541,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             + current_food_risk * 0.25
             + current_patch_bias.avoidance * 0.08
             + current_social_bias.avoidance * 0.08
-            + profile.urgency["thirst"] * 0.38
+            + profile.urgency["thirst"] * 0.3
             + profile.fear * 0.18,
             context="food",
             uncertainty=current_food_uncertainty * 0.25,
@@ -462,8 +564,12 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             expected=shelter_bonus * 0.8
             + current_shelter_expected * 0.3
             + current_patch_bias.revisit * 0.1
-            + current_social_bias.affinity * 0.08,
-            risk=current_shelter_risk * 0.2 + current_patch_bias.avoidance * 0.08 + current_social_bias.avoidance * 0.08,
+            + current_social_bias.affinity * 0.08
+            + max(0.0, current_camp_viability) * 0.18,
+            risk=current_shelter_risk * 0.2
+            + current_patch_bias.avoidance * 0.08
+            + current_social_bias.avoidance * 0.08
+            + current_stationary_penalty * 0.4,
             uncertainty=current_shelter_uncertainty * 0.2,
         )
 
@@ -479,8 +585,12 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
         expected=percept.current_shelter * 0.55
         + current_shelter_expected * 0.2
         + current_patch_bias.revisit * 0.08
-        + current_social_bias.affinity * 0.05,
-        risk=percept.current_danger * 0.04 + current_patch_bias.avoidance * 0.05 + current_social_bias.avoidance * 0.06,
+        + current_social_bias.affinity * 0.05
+        + max(0.0, current_camp_viability) * 0.12,
+        risk=percept.current_danger * 0.04
+        + current_patch_bias.avoidance * 0.05
+        + current_social_bias.avoidance * 0.06
+        + current_stationary_penalty * 0.55,
         uncertainty=current_shelter_uncertainty * 0.1,
     )
 
@@ -491,10 +601,12 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
         rng=rng,
         profile=profile,
         action="wait",
-        urgency=profile.urgency["safety"] * 0.2 + profile.urgency["fatigue"] * 0.15,
+        urgency=profile.urgency["safety"] * 0.12 + profile.urgency["fatigue"] * 0.08,
         trend=profile.trend["safety"] * 0.3,
-        expected=0.08 + percept.current_shelter * 0.08 + current_social_bias.affinity * 0.04,
-        risk=percept.current_danger * 0.02 + current_social_bias.avoidance * 0.05,
+        expected=0.04 + percept.current_shelter * 0.05 + current_social_bias.affinity * 0.03,
+        risk=percept.current_danger * 0.02
+        + current_social_bias.avoidance * 0.05
+        + current_stationary_penalty * 0.9,
     )
 
     if percept.current_danger > 0.45 and percept.best_neighbor_for_safety is not None:
@@ -521,13 +633,20 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             rng=rng,
             profile=profile,
             action="stay_with_kin",
-            urgency=profile.urgency["social"] * (1.1 if agent.age_stage == "child" else 0.65) + profile.obligation * 0.15,
+            urgency=max(
+                0.0,
+                profile.urgency["social"] * (0.95 if agent.age_stage == "child" else 0.38)
+                + profile.obligation * 0.12
+                - profile.urgency["hunger"] * 0.16
+                - profile.urgency["thirst"] * 0.22,
+            ),
             trend=profile.trend["social"],
             expected=0.2
             + current_social_bias.affinity * 0.42
             + current_social_bias.kin_presence * config.social.kin_preference_bias * 0.15
-            + current_social_bias.familiar_presence * config.social.familiar_preference_bias * 0.12,
-            risk=0.02 + current_social_bias.avoidance * 0.12,
+            + current_social_bias.familiar_presence * config.social.familiar_preference_bias * 0.12
+            + max(0.0, current_camp_viability) * 0.28,
+            risk=0.03 + current_social_bias.avoidance * 0.12 + current_stationary_penalty * 0.9,
         )
 
     if agent.age_stage != "child":
@@ -585,6 +704,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
 
     best_social_patch, best_social_bias = _best_social_patch(agent, percept, world, config.social, social_bias_for_patch)
     if best_social_patch is not None and best_social_bias is not None:
+        target_camp_viability = _camp_viability(world, best_social_patch, config)
         _add_candidate(
             candidates,
             agent=agent,
@@ -596,12 +716,34 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             trend=profile.trend["social"] * 0.8,
             expected=best_social_bias.affinity * 0.35
             + best_social_bias.kin_presence * config.social.kin_preference_bias * 0.18
-            + best_social_bias.familiar_presence * config.social.familiar_preference_bias * 0.18,
+            + best_social_bias.familiar_presence * config.social.familiar_preference_bias * 0.18
+            + max(0.0, target_camp_viability - current_camp_viability) * 0.45,
             risk=world.danger[best_social_patch] * 0.12
             + world.movement_cost[best_social_patch] * 0.08
             + best_social_bias.avoidance * 0.3,
             target_patch=best_social_patch,
             context="social",
+        )
+
+    best_camp_patch, best_camp_score = _best_camp_patch(agent, percept, world, config, social_bias_for_patch)
+    if best_camp_patch is not None:
+        _add_candidate(
+            candidates,
+            agent=agent,
+            config=config,
+            rng=rng,
+            profile=profile,
+            action="move_local",
+            urgency=profile.urgency["fatigue"] * 0.45
+            + profile.urgency["social"] * 0.25
+            + max(0.0, float(world.water[agent.patch_id]) - config.world.camp_wetness_threshold) * 0.9,
+            trend=profile.trend["fatigue"] * 0.3 + profile.trend["safety"] * 0.2,
+            expected=max(0.0, best_camp_score - current_camp_viability) * 0.95,
+            risk=world.danger[best_camp_patch] * 0.12
+            + world.movement_cost[best_camp_patch] * 0.08
+            + social_bias_for_patch(best_camp_patch).avoidance * 0.25,
+            target_patch=best_camp_patch,
+            context="camp",
         )
 
     if agent.carried_food > config.social.share_threshold and percept.nearby_agents:
@@ -626,6 +768,8 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
                 + reciprocity_pull
                 + (config.social.kin_preference_bias * 0.18 if target.agent_id in agent.child_ids or target.agent_id in agent.parent_ids else 0.0),
                 risk=max(0.0, 0.25 - agent.carried_food * 0.1)
+                + profile.urgency["hunger"] * 0.22
+                + profile.urgency["thirst"] * 0.16
                 + (max(0.0, edge.harm - edge.trust) * 0.22 if edge is not None else 0.0),
                 target_agent_id=target.agent_id,
             )
@@ -697,7 +841,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
                 risk=distance * 0.025
                 + remembered_water.risk * 0.12
                 + remembered_water.avoidance_bias * 0.18
-                + agent.fatigue * 0.03,
+                + agent.fatigue * 0.1,
                 target_patch=remembered_water.patch_id,
                 context="water",
                 uncertainty=max(0.0, 1.0 - remembered_water.confidence) * 0.2,
@@ -722,7 +866,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
                 risk=distance * 0.11
                 + remembered_food.risk * 0.4
                 + remembered_food.avoidance_bias * 0.45
-                + agent.fatigue * 0.12,
+                + agent.fatigue * 0.22,
                 target_patch=remembered_food.patch_id,
                 context="food",
                 uncertainty=max(0.0, 1.0 - remembered_food.confidence),
@@ -743,7 +887,10 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             + remembered_shelter.confidence * 0.55
             + remembered_shelter.revisit_bias * 0.32
             + remembered_shelter.emotional_weight * 0.06,
-            risk=distance * 0.08 + remembered_shelter.risk * 0.28 + remembered_shelter.avoidance_bias * 0.3,
+            risk=distance * 0.08
+            + remembered_shelter.risk * 0.28
+            + remembered_shelter.avoidance_bias * 0.3
+            + agent.fatigue * 0.14,
             target_patch=remembered_shelter.patch_id,
             context="shelter",
             uncertainty=max(0.0, 1.0 - remembered_shelter.confidence),
@@ -755,8 +902,9 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
         path_bias = world.path_traces.get(world.grid.ordered_edge(agent.patch_id, neighbor))
         neighbor_memory = memory_bias_for_patch(neighbor)
         neighbor_social = social_bias_for_patch(neighbor)
+        neighbor_camp_viability = _camp_viability(world, neighbor, config)
         expected = (
-            world.water[neighbor] * profile.urgency["thirst"] * 0.45
+            _water_access(world, neighbor) * profile.urgency["thirst"] * 0.45
             + world.food[neighbor] * profile.urgency["hunger"] * 0.4
             + world.shelter[neighbor] * profile.urgency["fatigue"] * 0.2
             + neighbor_memory.expected * 0.45
@@ -764,6 +912,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             + neighbor_social.affinity * 0.18
             + neighbor_social.kin_presence * config.social.kin_preference_bias * 0.08
             + neighbor_social.familiar_presence * config.social.familiar_preference_bias * 0.08
+            + max(0.0, neighbor_camp_viability - current_camp_viability) * 0.2
         )
         if path_bias is not None:
             expected += path_bias.strength * 0.06
@@ -773,6 +922,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             + neighbor_memory.risk * 0.45
             + neighbor_memory.avoidance * 0.6
             + neighbor_social.avoidance * 0.4
+            + max(0.0, float(world.water[neighbor]) - config.world.camp_wetness_threshold) * 0.22
         )
         _add_candidate(
             candidates,
@@ -781,10 +931,10 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             rng=rng,
             profile=profile,
             action="move_local",
-            urgency=max(profile.urgency["hunger"], profile.urgency["thirst"], profile.urgency["social"] * 0.35),
+            urgency=max(profile.urgency["hunger"], profile.urgency["thirst"], profile.urgency["social"] * 0.35) * 0.78,
             trend=max(profile.trend["hunger"], profile.trend["thirst"], profile.trend["safety"] * 0.5),
             expected=expected + agent.skills.navigation * 0.16,
-            risk=risk + profile.urgency["fatigue"] * 0.12,
+            risk=risk + profile.urgency["fatigue"] * 0.22,
             target_patch=neighbor,
         )
 
@@ -820,6 +970,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             clock,
             best_social_patch=best_social_patch,
             remembered_water_patch=remembered_water.patch_id if remembered_water is not None else None,
+            best_camp_patch=best_camp_patch,
         )
 
     top = considered[0]
@@ -870,6 +1021,7 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             clock,
             best_social_patch=best_social_patch,
             remembered_water_patch=remembered_water.patch_id if remembered_water is not None else None,
+            best_camp_patch=best_camp_patch,
         )
     if second is not None and (top.score - second.score) < config.decision.uncertainty_margin:
         return _fallback_intent(
@@ -879,5 +1031,6 @@ def generate_action_intent(agent, percept, world, agents_by_id, clock, config, r
             clock,
             best_social_patch=best_social_patch,
             remembered_water_patch=remembered_water.patch_id if remembered_water is not None else None,
+            best_camp_patch=best_camp_patch,
         )
     return top
