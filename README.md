@@ -22,6 +22,13 @@ python -m civsim.cli.run --config configs/base.toml --seed 42 --days 180
 python -m civsim.cli.inspect --run outputs/run_seed42_days180
 ```
 
+To launch the live 2D debug viewer:
+
+```powershell
+pip install -e .[dev,viewer]
+python -m civsim.cli.view --config configs/base.toml --seed 42
+```
+
 Run a small batch:
 
 ```powershell
@@ -36,6 +43,8 @@ python -m civsim.cli.batch --config configs/base.toml --seeds 5 --days 180
 - minimal layered memory and simple learning
 - parent-child dependency, kin sociality, and camp persistence
 - batch metrics and event logging for validation
+- optional pygame-based live viewer for debugging and visual inspection
 
 See [docs/architecture.md](docs/architecture.md) for the system structure and
-[docs/tuning.md](docs/tuning.md) for parameter guidance.
+[docs/tuning.md](docs/tuning.md) for parameter guidance. Viewer controls and
+launch notes are in [docs/viewer.md](docs/viewer.md).

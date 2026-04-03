@@ -19,10 +19,21 @@ class WorldConfig:
     season_length_days: int = 60
     water_source_count: int = 5
     danger_source_count: int = 5
+    water_access_exponent: float = 1.7
+    danger_exponent: float = 1.35
+    shelter_exponent: float = 1.25
+    movement_cost_min: float = 0.85
+    movement_cost_max: float = 3.4
     food_regrowth_good: float = 0.09
     food_regrowth_bad: float = 0.03
-    good_season_food_multiplier: float = 1.05
-    bad_season_food_multiplier: float = 0.72
+    good_season_food_multiplier: float = 1.12
+    bad_season_food_multiplier: float = 0.48
+    bad_season_food_decay: float = 0.03
+    dry_patch_thirst_penalty: float = 0.03
+    night_exposure_fatigue: float = 0.06
+    night_exposure_stress: float = 0.035
+    danger_fatigue_scale: float = 0.05
+    danger_stress_scale: float = 0.16
     site_decay: float = 0.01
     path_decay: float = 0.005
     camp_shelter_bonus: float = 0.15
@@ -64,6 +75,18 @@ class LearningConfig:
 
 
 @dataclass(slots=True)
+class DecisionConfig:
+    noise_scale: float = 0.14
+    attention_patch_limit: int = 4
+    attention_action_limit: int = 8
+    trend_weight: float = 1.1
+    inertia_bonus: float = 0.28
+    inertia_switch_margin: float = 0.22
+    fallback_threshold: float = 0.3
+    uncertainty_margin: float = 0.18
+
+
+@dataclass(slots=True)
 class SocialConfig:
     share_threshold: float = 1.4
     share_amount: float = 0.6
@@ -72,6 +95,11 @@ class SocialConfig:
     attachment_gain: float = 0.04
     co_residence_gain: float = 0.03
     theft_stress: float = 0.12
+    kin_preference_bias: float = 0.65
+    familiar_preference_bias: float = 0.28
+    reciprocity_bias: float = 0.24
+    avoidance_bias: float = 0.48
+    caregiver_priority_bias: float = 0.75
 
 
 @dataclass(slots=True)
@@ -112,6 +140,7 @@ class SimulationConfig:
     agents: AgentsConfig
     memory: MemoryConfig
     learning: LearningConfig
+    decision: DecisionConfig
     social: SocialConfig
     life: LifeConfig
     materials: MaterialsConfig
@@ -133,6 +162,7 @@ def load_config(path: str | Path) -> SimulationConfig:
         agents=_section(data, "agents", AgentsConfig),
         memory=_section(data, "memory", MemoryConfig),
         learning=_section(data, "learning", LearningConfig),
+        decision=_section(data, "decision", DecisionConfig),
         social=_section(data, "social", SocialConfig),
         life=_section(data, "life", LifeConfig),
         materials=_section(data, "materials", MaterialsConfig),

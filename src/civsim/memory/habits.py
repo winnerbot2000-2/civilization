@@ -24,6 +24,22 @@ def reinforce_habit(habits: dict[str, HabitBias], key: str, delta: float) -> Non
         entry.strength = max(-1.0, min(2.5, entry.strength + delta))
 
 
+def transition_key(previous_action: str, action: str) -> str:
+    return f"sequence:{previous_action}->{action}"
+
+
+def transition_bias(habits: dict[str, HabitBias], previous_action: str | None, action: str) -> float:
+    if previous_action is None:
+        return 0.0
+    return habit_bias(habits, transition_key(previous_action, action))
+
+
+def reinforce_transition(habits: dict[str, HabitBias], previous_action: str | None, action: str, delta: float) -> None:
+    if previous_action is None:
+        return
+    reinforce_habit(habits, transition_key(previous_action, action), delta)
+
+
 def decay_habits(habits: dict[str, HabitBias], decay: float) -> None:
     to_delete: list[str] = []
     for key, entry in habits.items():

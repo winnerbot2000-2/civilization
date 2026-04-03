@@ -72,13 +72,20 @@ def generate_world(config: WorldConfig, rng: np.random.Generator) -> WorldState:
     shape = (config.height, config.width)
     grid = Grid(config.width, config.height)
 
-    water = _source_field(rng, shape, config.water_source_count)
-    danger = np.maximum(_source_field(rng, shape, config.danger_source_count), _smooth_field(rng, shape, 2) * 0.6)
-    shelter = _smooth_field(rng, shape, 4)
-    movement_cost = 1.0 + _smooth_field(rng, shape, 3) * 1.4
+    water_raw = _source_field(rng, shape, config.water_source_count)
+    water = np.clip((water_raw - 0.12) / 0.88, 0.0, 1.0) ** config.water_access_exponent
 
-    fertility = np.clip(0.25 + water * 0.45 + shelter * 0.2 - danger * 0.15, 0.05, 1.0)
-    food_capacity = 2.0 + fertility * 3.0
+    danger_raw = np.maximum(_source_field(rng, shape, config.danger_source_count), _smooth_field(rng, shape, 2) * 0.65)
+    danger = np.clip(danger_raw, 0.0, 1.0) ** config.danger_exponent
+
+    shelter_raw = _smooth_field(rng, shape, 4)
+    shelter = np.clip(0.08 + shelter_raw * 0.92, 0.0, 1.0) ** config.shelter_exponent
+
+    roughness = np.clip((_smooth_field(rng, shape, 3) * 0.8) + danger * 0.35 + (1.0 - shelter) * 0.15, 0.0, 1.0)
+    movement_cost = config.movement_cost_min + roughness * (config.movement_cost_max - config.movement_cost_min)
+
+    fertility = np.clip(0.08 + water * 0.68 + shelter * 0.16 - danger * 0.24 - roughness * 0.12, 0.02, 1.0)
+    food_capacity = 0.85 + fertility * 2.8
     food = food_capacity.copy()
 
     return WorldState(

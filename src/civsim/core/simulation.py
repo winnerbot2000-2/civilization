@@ -87,6 +87,11 @@ class SimulationState:
             fatigue=0.1,
             stress=0.0,
             social_need=0.1,
+            previous_hunger=0.2,
+            previous_thirst=0.2,
+            previous_fatigue=0.1,
+            previous_stress=0.0,
+            previous_social_need=0.1,
             reproductive_ready=True,
             fertility_cooldown=0,
             pregnancy_days_remaining=None,
@@ -150,7 +155,7 @@ def initialize_simulation(config: SimulationConfig, seed: int | None = None) -> 
     run_seed = config.run.seed if seed is None else seed
     rng = SeedRegistry(run_seed)
     world = generate_world(config.world, rng.numpy("world"))
-    agents = create_initial_agents(config.agents, world, rng.python("agents"))
+    agents = create_initial_agents(config.agents, config.life, world, rng.python("agents"))
     agents_by_id = {agent.agent_id: agent for agent in agents}
     state = SimulationState(
         config=config,
@@ -262,6 +267,7 @@ def run_tick(state: SimulationState) -> None:
             outcome_score=outcome.outcome_score if outcome.success else -0.2,
             rate=state.config.learning.reinforcement_rate,
             context_key=state.clock.season_name,
+            previous_action=outcome.previous_action,
         )
         if outcome.action == "forage" and outcome.success:
             improve_skill(agent.skills, "foraging", state.config.learning.skill_gain_rate)
@@ -287,17 +293,57 @@ def run_tick(state: SimulationState) -> None:
 def _encode_local_patch_memory(state: SimulationState, agent: AgentState) -> None:
     patch_id = agent.patch_id
     if state.world.water[patch_id] > 0.25:
-        remember_site(agent.spatial_memory, "water", patch_id, payoff=float(state.world.water[patch_id]), risk=float(state.world.danger[patch_id]), day=state.clock.day, max_entries=state.config.memory.max_spatial_entries)
+        remember_site(
+            agent.spatial_memory,
+            "water",
+            patch_id,
+            payoff=float(state.world.water[patch_id]),
+            risk=float(state.world.danger[patch_id]),
+            day=state.clock.day,
+            max_entries=state.config.memory.max_spatial_entries,
+            emotional_impact=agent.thirst * 0.12,
+            revisit_delta=max(0.0, float(state.world.water[patch_id]) - 0.35) * 0.05,
+        )
     if state.world.food[patch_id] > 0.3:
-        remember_site(agent.spatial_memory, "food", patch_id, payoff=float(state.world.food[patch_id]), risk=float(state.world.danger[patch_id]), day=state.clock.day, max_entries=state.config.memory.max_spatial_entries)
+        remember_site(
+            agent.spatial_memory,
+            "food",
+            patch_id,
+            payoff=float(state.world.food[patch_id]),
+            risk=float(state.world.danger[patch_id]),
+            day=state.clock.day,
+            max_entries=state.config.memory.max_spatial_entries,
+            emotional_impact=agent.hunger * 0.1,
+            revisit_delta=max(0.0, float(state.world.food[patch_id]) - 0.3) * 0.04,
+        )
     shelter_payoff = float(state.world.shelter[patch_id])
     site = state.world.site_markers.get(patch_id)
     if site is not None:
-        shelter_payoff += site.hearth_intensity * 0.2 + min(site.communal_food, 1.0) * 0.1
+        shelter_payoff += site.hearth_intensity * state.config.world.camp_shelter_bonus + min(site.communal_food, 1.0) * 0.1
     if shelter_payoff > 0.25:
-        remember_site(agent.spatial_memory, "shelter", patch_id, payoff=shelter_payoff, risk=float(state.world.danger[patch_id]), day=state.clock.day, max_entries=state.config.memory.max_spatial_entries)
+        remember_site(
+            agent.spatial_memory,
+            "shelter",
+            patch_id,
+            payoff=shelter_payoff,
+            risk=float(state.world.danger[patch_id]),
+            day=state.clock.day,
+            max_entries=state.config.memory.max_spatial_entries,
+            emotional_impact=(agent.fatigue + agent.stress) * 0.08,
+            revisit_delta=max(0.0, shelter_payoff - 0.25) * 0.05,
+        )
     if state.world.danger[patch_id] > 0.45:
-        remember_site(agent.spatial_memory, "danger", patch_id, payoff=0.0, risk=float(state.world.danger[patch_id]), day=state.clock.day, max_entries=state.config.memory.max_spatial_entries)
+        remember_site(
+            agent.spatial_memory,
+            "danger",
+            patch_id,
+            payoff=0.0,
+            risk=float(state.world.danger[patch_id]),
+            day=state.clock.day,
+            max_entries=state.config.memory.max_spatial_entries,
+            emotional_impact=agent.stress * 0.15,
+            avoidance_delta=float(state.world.danger[patch_id]) * 0.08,
+        )
 
 
 def run_simulation(config: SimulationConfig, seed: int | None = None, days: int | None = None) -> tuple[SimulationState, RunSummary]:
@@ -312,15 +358,14 @@ def run_simulation(config: SimulationConfig, seed: int | None = None, days: int 
 
 def build_summary(state: SimulationState, seed: int, days: int) -> RunSummary:
     alive = [agent for agent in state.agents if agent.alive]
-    children = [agent for agent in state.agents if agent.age_stage == "child"]
-    living_children = [agent for agent in children if agent.alive]
     edges = [edge for agent in alive for edge in agent.social_memory.values()]
     mean_remembered_sites = sum(len(agent.spatial_memory) for agent in alive) / max(1, len(alive))
+    child_survival_rate = 1.0 - (state.child_death_count / max(1, state.child_count_total))
     return RunSummary(
         seed=seed,
         days=days,
         final_population=len(alive),
-        child_survival_rate=1.0 - (state.child_death_count / max(1, state.child_count_total)),
+        child_survival_rate=max(0.0, min(1.0, child_survival_rate)),
         hearth_count=sum(1 for site in state.world.site_markers.values() if site.hearth_intensity > 0.2),
         path_count=len(state.world.path_traces),
         mean_trust=(sum(edge.trust for edge in edges) / len(edges)) if edges else 0.0,

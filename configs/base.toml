@@ -9,10 +9,21 @@ ticks_per_day = 4
 season_length_days = 60
 water_source_count = 5
 danger_source_count = 5
-food_regrowth_good = 0.09
-food_regrowth_bad = 0.03
-good_season_food_multiplier = 1.05
-bad_season_food_multiplier = 0.72
+water_access_exponent = 1.7
+danger_exponent = 1.35
+shelter_exponent = 1.25
+movement_cost_min = 0.85
+movement_cost_max = 3.4
+food_regrowth_good = 0.11
+food_regrowth_bad = 0.015
+good_season_food_multiplier = 1.12
+bad_season_food_multiplier = 0.48
+bad_season_food_decay = 0.03
+dry_patch_thirst_penalty = 0.03
+night_exposure_fatigue = 0.06
+night_exposure_stress = 0.035
+danger_fatigue_scale = 0.05
+danger_stress_scale = 0.16
 site_decay = 0.01
 path_decay = 0.005
 camp_shelter_bonus = 0.15
@@ -23,14 +34,14 @@ initial_children = 24
 perception_radius = 1
 starting_food = 1.8
 max_carried_food = 4.0
-hunger_rate = 0.03
-thirst_rate = 0.05
+hunger_rate = 0.035
+thirst_rate = 0.065
 fatigue_rate = 0.02
 social_need_rate = 0.01
 stress_recovery = 0.05
-base_food_yield = 0.9
-base_water_relief = 1.1
-rest_recovery = 0.24
+base_food_yield = 0.78
+base_water_relief = 0.95
+rest_recovery = 0.22
 
 [memory]
 max_spatial_entries = 16
@@ -46,6 +57,16 @@ imitation_rate = 0.04
 skill_gain_rate = 0.02
 child_observation_bonus = 0.02
 
+[decision]
+noise_scale = 0.14
+attention_patch_limit = 4
+attention_action_limit = 8
+trend_weight = 1.1
+inertia_bonus = 0.28
+inertia_switch_margin = 0.22
+fallback_threshold = 0.3
+uncertainty_margin = 0.18
+
 [social]
 share_threshold = 1.4
 share_amount = 0.6
@@ -54,6 +75,11 @@ trust_loss = 0.18
 attachment_gain = 0.04
 co_residence_gain = 0.03
 theft_stress = 0.12
+kin_preference_bias = 0.65
+familiar_preference_bias = 0.28
+reciprocity_bias = 0.24
+avoidance_bias = 0.48
+caregiver_priority_bias = 0.75
 
 [life]
 child_stage_days = 240

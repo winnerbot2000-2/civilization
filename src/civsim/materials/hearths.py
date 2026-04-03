@@ -14,11 +14,14 @@ def strengthen_hearths(world, agents, clock, config, event_bus) -> None:
             continue
         site = world.ensure_site(patch_id)
         before = site.hearth_intensity
+        previous_visits = site.visit_count
         site.hearth_intensity = min(3.0, site.hearth_intensity + config.hearth_strength_gain)
         site.last_used_day = clock.day
         site.visit_count += len(patch_agents)
         if before < 0.2 <= site.hearth_intensity:
             event_bus.emit(EventRecord(tick=clock.tick, day=clock.day, kind="hearth_formed", patch_id=patch_id))
+        elif before >= 0.2 and (previous_visits // 12) < (site.visit_count // 12):
+            event_bus.emit(EventRecord(tick=clock.tick, day=clock.day, kind="camp_reused", patch_id=patch_id))
 
 
 def decay_hearths(world, decay: float) -> None:
